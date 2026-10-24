@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: com.volei.reservas.command.ReservaCommandServiceTest
--------------------------------------------------------------------------------
-Tests run: 20, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.542 s -- in com.volei.reservas.command.ReservaCommandServiceTest
