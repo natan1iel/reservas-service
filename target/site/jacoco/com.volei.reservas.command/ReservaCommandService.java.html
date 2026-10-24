@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="pt"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReservaCommandService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">reservas-service</a> &gt; <a href="index.source.html" class="el_package">com.volei.reservas.command</a> &gt; <span class="el_source">ReservaCommandService.java</span></div><h1>ReservaCommandService.java</h1><pre class="source lang-java linenums">package com.volei.reservas.command;
+
+import com.volei.reservas.client.QuadraClient;
+import com.volei.reservas.client.QuadraDisponibilidadeDTO;
+import com.volei.reservas.exception.ConflitoDeHorarioException;
+import com.volei.reservas.exception.RegraDeNegocioException;
+import com.volei.reservas.model.Reserva;
+import com.volei.reservas.model.StatusReserva;
+import com.volei.reservas.query.ReservaConsulta;
+import com.volei.reservas.query.ReservaConsultaRepository;
+import com.volei.reservas.repository.ReservaRepository;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.util.List;
+
+@Service
+public class ReservaCommandService {
+    public static final int LIMITE_DE_RESERVAS_ATIVAS = 2;
+
+    private final ReservaRepository reservaRepository;
+    private final ReservaConsultaRepository reservaConsultaRepository;
+    private final QuadraClient quadraClient;
+
+    public ReservaCommandService(ReservaRepository reservaRepository,
+<span class="fc" id="L29">            ReservaConsultaRepository reservaConsultaRepository, QuadraClient quadraClient) {</span>
+<span class="fc" id="L30">        this.reservaRepository = reservaRepository;</span>
+<span class="fc" id="L31">        this.reservaConsultaRepository = reservaConsultaRepository;</span>
+<span class="fc" id="L32">        this.quadraClient = quadraClient;</span>
+<span class="fc" id="L33">    }</span>
+
+    @Transactional
+    public ReservaConsulta criar(CriarReservaCommand comando, Long usuarioId, String usuarioNome) {
+<span class="fc" id="L37">        validarCamposObrigatorios(comando);</span>
+
+<span class="fc bfc" id="L39" title="All 2 branches covered.">        if (comando.data().isBefore(LocalDate.now())) {</span>
+<span class="fc" id="L40">            throw RegraDeNegocioException.invalida(&quot;Não é possível reservar uma data que já passou&quot;);</span>
+        }
+
+<span class="fc" id="L43">        long duracao = Duration.between(comando.horaInicio(), comando.horaFim()).toMinutes();</span>
+<span class="pc bpc" id="L44" title="1 of 4 branches missed.">        if (duracao != 60 &amp;&amp; duracao != 120) {</span>
+<span class="fc" id="L45">            throw RegraDeNegocioException.invalida(</span>
+                    &quot;A reserva precisa ter exatamente 1h ou 2h de duração (pedido: &quot; + duracao + &quot; min)&quot;);
+        }
+
+<span class="fc" id="L49">        QuadraDisponibilidadeDTO quadra =</span>
+<span class="fc" id="L50">                quadraClient.consultarDisponibilidade(comando.quadraId(), comando.data());</span>
+
+<span class="fc bfc" id="L52" title="All 2 branches covered.">        if (!Boolean.TRUE.equals(quadra.ativa())) {</span>
+<span class="fc" id="L53">            throw RegraDeNegocioException.invalida(&quot;A quadra &quot; + quadra.codigo() + &quot; está inativa&quot;);</span>
+        }
+
+<span class="fc bfc" id="L56" title="All 2 branches covered.">        if (!Boolean.TRUE.equals(quadra.aberta())) {</span>
+<span class="fc" id="L57">            throw RegraDeNegocioException.invalida(&quot;A quadra &quot; + quadra.codigo() + &quot; não abre em &quot; + comando.data());</span>
+        }
+
+<span class="pc bpc" id="L60" title="1 of 4 branches missed.">        if (comando.horaInicio().isBefore(quadra.abertura()) || comando.horaFim().isAfter(quadra.fechamento())) {</span>
+<span class="fc" id="L61">            throw RegraDeNegocioException.invalida(</span>
+<span class="fc" id="L62">                    &quot;A quadra &quot; + quadra.codigo() + &quot; funciona das &quot; + quadra.abertura() + &quot; às &quot; + quadra.fechamento() + &quot; neste dia&quot;);</span>
+        }
+
+<span class="fc" id="L65">        validarLimiteDoUsuario(usuarioId);</span>
+
+<span class="fc" id="L67">        validarConflito(comando, quadra.intervaloMinutos());</span>
+
+<span class="fc" id="L69">        Reserva reserva = new Reserva(comando.quadraId(), usuarioId, comando.data(), comando.horaInicio(),</span>
+<span class="fc" id="L70">                comando.horaFim());</span>
+
+<span class="fc" id="L72">        Reserva salva = reservaRepository.save(reserva);</span>
+<span class="fc" id="L73">        return reservaConsultaRepository.save(montarConsulta(salva, quadra, usuarioNome));</span>
+    }
+
+    @Transactional
+    public ReservaConsulta cancelar(CancelarReservaCommand comando) {
+<span class="fc" id="L78">        Reserva reserva = reservaRepository.findById(comando.reservaId())</span>
+<span class="fc" id="L79">                .orElseThrow(() -&gt; RegraDeNegocioException.reservaNaoEncontrada(comando.reservaId()));</span>
+
+<span class="fc bfc" id="L81" title="All 4 branches covered.">        if (!reserva.getUsuarioId().equals(comando.usuarioId()) &amp;&amp; !&quot;ADMIN&quot;.equals(comando.papel())) {</span>
+<span class="fc" id="L82">            throw RegraDeNegocioException.negada(&quot;Você só pode cancelar suas próprias reservas&quot;);</span>
+        }
+
+<span class="fc bfc" id="L85" title="All 2 branches covered.">        if (reserva.getStatus() == StatusReserva.CANCELADA) {</span>
+<span class="fc" id="L86">            throw RegraDeNegocioException.operacaoInvalida(&quot;Esta reserva já está cancelada&quot;);</span>
+        }
+
+<span class="fc" id="L89">        reserva.setStatus(StatusReserva.CANCELADA);</span>
+<span class="fc" id="L90">        reservaRepository.save(reserva);</span>
+
+<span class="fc" id="L92">        ReservaConsulta consulta = reservaConsultaRepository.findById(comando.reservaId())</span>
+<span class="fc" id="L93">                .orElseThrow(</span>
+<span class="nc" id="L94">                        () -&gt; new IllegalStateException(&quot;Reserva &quot; + comando.reservaId() + &quot; existe na escrita mas não na leitura&quot;));</span>
+<span class="fc" id="L95">        consulta.setStatus(StatusReserva.CANCELADA.name());</span>
+
+<span class="fc" id="L97">        return reservaConsultaRepository.save(consulta);</span>
+    }
+
+    public static boolean conflita(LocalTime inicioNovo, LocalTime fimNovo, LocalTime inicioExistente,
+            LocalTime fimExistente, int intervaloMinutos) {
+<span class="fc bfc" id="L102" title="All 2 branches covered.">        return inicioNovo.isBefore(fimExistente.plusMinutes(intervaloMinutos))</span>
+<span class="fc bfc" id="L103" title="All 2 branches covered.">            &amp;&amp; fimNovo.plusMinutes(intervaloMinutos).isAfter(inicioExistente);</span>
+    }
+
+    private void validarConflito(CriarReservaCommand comando, int intervaloMinutos) {
+<span class="fc" id="L107">        List&lt;Reserva&gt; doDia = reservaRepository.findByQuadraIdAndDataAndStatus(comando.quadraId(), comando.data(),</span>
+                StatusReserva.ATIVA);
+
+<span class="fc bfc" id="L110" title="All 2 branches covered.">        for (Reserva existente : doDia) {</span>
+<span class="fc" id="L111">            if (</span>
+<span class="fc bfc" id="L112" title="All 2 branches covered.">                    conflita(comando.horaInicio(), comando.horaFim(), existente.getHoraInicio(), existente.getHoraFim(), intervaloMinutos)) {</span>
+<span class="fc" id="L113">                throw new ConflitoDeHorarioException(existente);</span>
+            }
+<span class="fc" id="L115">        }</span>
+<span class="fc" id="L116">    }</span>
+
+    private void validarLimiteDoUsuario(Long usuarioId) {
+<span class="fc" id="L119">        long ativas = reservaRepository.countByUsuarioIdAndStatusAndDataGreaterThanEqual(usuarioId, StatusReserva.ATIVA,</span>
+<span class="fc" id="L120">                LocalDate.now());</span>
+
+<span class="fc bfc" id="L122" title="All 2 branches covered.">        if (ativas &gt;= LIMITE_DE_RESERVAS_ATIVAS) {</span>
+<span class="fc" id="L123">            throw RegraDeNegocioException.limiteDeReservas(LIMITE_DE_RESERVAS_ATIVAS);</span>
+        }
+<span class="fc" id="L125">    }</span>
+
+    private void validarCamposObrigatorios(CriarReservaCommand comando) {
+<span class="fc bfc" id="L128" title="All 2 branches covered.">        if (comando.quadraId() == null) {</span>
+<span class="fc" id="L129">            throw RegraDeNegocioException.invalida(&quot;Informe a quadra&quot;);</span>
+        }
+<span class="pc bpc" id="L131" title="1 of 2 branches missed.">        if (comando.data() == null) {</span>
+<span class="nc" id="L132">            throw RegraDeNegocioException.invalida(&quot;Informe a data&quot;);</span>
+        }
+<span class="pc bpc" id="L134" title="2 of 4 branches missed.">        if (comando.horaInicio() == null || comando.horaFim() == null) {</span>
+<span class="nc" id="L135">            throw RegraDeNegocioException.invalida(&quot;Informe a hora de início e a de fim&quot;);</span>
+        }
+<span class="fc" id="L137">    }</span>
+
+    private ReservaConsulta montarConsulta(Reserva reserva, QuadraDisponibilidadeDTO quadra, String usuarioNome) {
+<span class="fc" id="L140">        return new ReservaConsulta(reserva.getId(), reserva.getQuadraId(), quadra.codigo(), quadra.tipo(),</span>
+<span class="fc" id="L141">                quadra.intervaloMinutos(), reserva.getUsuarioId(), usuarioNome, reserva.getData(),</span>
+<span class="fc" id="L142">                reserva.getHoraInicio(), reserva.getHoraFim(), reserva.getStatus().name());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.12.202403310830</span></div></body></html>
